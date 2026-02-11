@@ -1,0 +1,4 @@
+testthread (start): 0
+created thread: 1
+testthread (done): 11
+got lock: 11
