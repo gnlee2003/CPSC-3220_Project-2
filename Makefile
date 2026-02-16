@@ -8,7 +8,7 @@ libmythreads.a: libmythreads.o
 	ar -cvrs libmythreads.a libmythreads.o
 
 libmythreads.o: libmythreads.c
-	$(CC) $(CFLAGS) -c libmythreads.c -o libmythreads.o
+	$(CC) $(CFLAGS) -c libmythreads.c -o libmythreads.o 
 
 clean:
 	rm -f libmythreads.a *.o
