@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -g
 
-all: libmythreads.a tests
+all: libmythreads.a #tests
 
 libmythreads.a: libmythreads.o
 	rm -f libmythreads.a
