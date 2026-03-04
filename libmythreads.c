@@ -74,6 +74,11 @@ ID = 0 if op == 0
 */
 void waitingListHandler(int **list, int *num, int op, int id){
     if (op == 1){ // adding to list
+        for (int i = 0; i < (*num); i++){ //check for duplicates
+            if ((*list)[i] == id){
+                return;
+            }
+        }
         (*num)++;
         *list = realloc(*list, sizeof(int) * (*num));
         (*list)[(*num) - 1] = id;
@@ -181,21 +186,20 @@ int threadCreate(thFuncPtr funcPtr, void *argPtr) {
 
 void threadYield(void){
     interruptsAreDisabled = 1;
-    //Check after the current thread in the LL
-    thread_t *rover = Header -> front;
-    while (rover != NULL){
-        if(rover -> status == READY && rover -> threadId != currentThread -> threadId){
-            rover -> status = RUNNING;
-            currentThread -> status = READY;
-            thread_t *temp = currentThread;
-            currentThread = rover;
-            swapcontext(&temp -> context, &rover -> context);
-            interruptsAreDisabled = 0;
-            return;
-        }
-        rover = rover -> next;
+    thread_t *next = NextReadyThread();
+
+    if (next != NULL) {
+        thread_t *temp = currentThread;
+        currentThread = next;
+        next -> status = RUNNING;
+        temp -> status = READY;
+        swapcontext(&temp -> context, &next -> context);
+        temp -> status = RUNNING;
+        currentThread = temp;
     }
+
     //If none were found
+    interruptsAreDisabled = 0;
     return;
 }
 
@@ -274,61 +278,77 @@ mutexlock_t *lockCreate(void) {
     mutexlock_t *newLock = (mutexlock_t *)malloc(sizeof(mutexlock_t));
     newLock -> locked = UNLOCKED;
     newLock -> thread = NULL;
+    newLock -> waitingThreads = NULL;
+    newLock -> numWaiting = 0;
 
-    return newLock;
+    return newLock; 
 }
 
 void lockDestroy(mutexlock_t *lock) {
+    interruptsAreDisabled = 1;
+    free(lock -> waitingThreads);
     free(lock);
+    interruptsAreDisabled = 0;
 }
 
 void threadLock(mutexlock_t *lock){
-    if (lock -> locked == LOCKED){
-        waitingListHandler(&lock -> waitingThreads, &lock -> numWaiting, 1, currentThread -> threadId);
-        thread_t *rover = currentThread -> next;
-        if (rover != NULL){
-            while(rover != currentThread){
-                if (rover -> status == READY){
-                    break;
-                }
-                if (rover == NULL) rover = Header -> front; //Check before currentThread in LL
-                rover = rover -> next;
-            }
+    interruptsAreDisabled = 1;
 
-            if (rover == currentThread){
-                return;
-            }else{
-                currentThread -> status = WAITING;
-                rover -> status = RUNNING;
-                thread_t *temp = currentThread;
-                currentThread = rover;
-                swapcontext(&temp -> context, &currentThread -> context);
-                return;
-            }
-        }else{
-            getcontext(&currentThread -> context);
-            return;
+    while (lock -> locked == LOCKED){
+        waitingListHandler(&lock -> waitingThreads, &lock -> numWaiting, ADDINGLIST, currentThread -> threadId);
+
+        currentThread -> status = WAITING;
+        thread_t *next = NextReadyThread();
+        if (next != NULL){
+            thread_t *temp = currentThread;
+            currentThread = next;
+
+            next -> status = RUNNING;
+            swapcontext(&temp -> context, &next -> context);
+            temp -> status = RUNNING;
+            currentThread = temp;
         }
-    }else{
-        lock -> thread = currentThread;
-        lock -> locked = LOCKED;
     }
+
+    assert(lock -> locked == UNLOCKED);
+    lock -> locked = LOCKED;
+    lock -> thread = currentThread;
+
+    interruptsAreDisabled = 0;
+    return;
 }
 
 void threadUnlock(mutexlock_t *lock){
+    interruptsAreDisabled = 1;
     lock -> locked = UNLOCKED;
     lock -> thread = NULL;
+
+    if (lock -> numWaiting > 0){
+        int id = lock -> waitingThreads[0];
+        waitingListHandler(&lock -> waitingThreads, &lock -> numWaiting, REMOVINGLIST, NOID);
+
+        thread_t *rover = Header -> front;
+        while(rover != NULL && rover -> threadId != id) rover = rover -> next;
+
+        if (rover != NULL) rover -> status = READY;
+    }
+
+    interruptsAreDisabled = 0;
 }
 
 condvar_t *condvarCreate(void) {
     condvar_t *newVar = (condvar_t *)malloc(sizeof(condvar_t));
     newVar -> numWaiting = 0;
+    newVar -> waitingThreads = NULL;
 
     return newVar;
 }
 
 void condvarDestroy(condvar_t *cv) {
+    interruptsAreDisabled = 1;
+    free(cv -> waitingThreads);
     free(cv);
+    interruptsAreDisabled = 0;
 }
 
 void threadWait(mutexlock_t *lock, condvar_t *cv) {
@@ -336,16 +356,22 @@ void threadWait(mutexlock_t *lock, condvar_t *cv) {
     waitingListHandler(&cv -> waitingThreads, &cv -> numWaiting, ADDINGLIST, currentThread -> threadId);
 
     threadUnlock(lock);
-
     currentThread -> status = WAITING;
     thread_t *next = NextReadyThread();
-    thread_t *temp = currentThread;
-    currentThread = next;
-    next -> status = RUNNING;
-    swapcontext(&temp -> context, &next -> context);
+
+    if (next != NULL){
+        thread_t *temp = currentThread;
+        next -> status = RUNNING;
+        currentThread = next;
+
+        swapcontext(&temp -> context, &next -> context);
+
+        temp -> status = RUNNING;
+        currentThread = temp;
+    }
 
     threadLock(lock);
-    interruptsAreDisabled = 0;
+    return;
 }
 
 void threadSignal(mutexlock_t *lock, condvar_t *cv) {
