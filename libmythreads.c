@@ -5,30 +5,36 @@
 
 #include "mythreads.h"
 
+//Used for thread status
 #define RUNNING 1
 #define WAITING 2
 #define READY 3
 #define EXITED 4
 
+//Used for Lock Status
 #define LOCKED 1
 #define UNLOCKED 0
 
+//Used for waiting list handling
 #define ADDINGLIST 1
 #define REMOVINGLIST 0
 #define NOID 0
 
+//Lock structure
 typedef struct mutexlock{
     int locked; //0 Unlocked - 1 Locked
-    int *waitingThreads;
+    int *waitingThreads; //Waiting List
     int numWaiting;
-    void *thread;
+    void *thread; //Holding thread
 }mutexlock_t;
 
+//conditional variable struct
 typedef struct condvar{
     int *waitingThreads;
     int numWaiting;
 } condvar_t;
 
+//Thread Element Struct
 typedef struct thread{
     int threadId;
     int status;
@@ -51,8 +57,6 @@ typedef struct{ //going to use this as the header for threads and locks
 
 int interruptsAreDisabled = 0;
 
-int lockCount = 0;
-int condvarCount = 0;
 threadHeader_t *Header = NULL;
 thread_t *currentThread = NULL;
 
@@ -112,18 +116,25 @@ void waitingListHandler(int **list, int *num, int op, int id){
 }
 
 thread_t *NextReadyThread(){
-    thread_t *rover = Header -> front;
+    //Round Robin Search Method
+    thread_t *rover = currentThread -> next;
 
     while(rover != NULL){
-        if (rover -> status == READY && rover -> threadId != currentThread -> threadId){
-            return rover;
-        }
+        if (rover -> status == READY) return rover;
+        rover = rover -> next;
+    }
+
+    //wrap around
+    rover = Header -> front;
+    while (rover != NULL && rover != currentThread){
+        if (rover -> status == READY) return rover;
         rover = rover -> next;
     }
 
     return NULL;
 }
 
+//Helper function that removes and free LL element
 void RemoveLLElement(thread_t *element){
     assert(element != NULL);
 
@@ -148,6 +159,7 @@ void RemoveLLElement(thread_t *element){
     free(element);
 }
 
+//Initializes LL Header and main thread
 void threadInit(void) { 
     Header = (threadHeader_t *)malloc(sizeof(threadHeader_t));
     Header -> front = NULL;
@@ -156,6 +168,7 @@ void threadInit(void) {
     threadCreate(NULL, NULL);
 }
 
+//Creates new thread and context switches to new one
 int threadCreate(thFuncPtr funcPtr, void *argPtr) {
     interruptDisable();
     thread_t *newThread = (thread_t *)malloc(sizeof(thread_t));
@@ -182,11 +195,12 @@ int threadCreate(thFuncPtr funcPtr, void *argPtr) {
         Header->back->next = newThread;
         Header->back = newThread;
         Header -> threadCount++;
-        newThread -> stack = malloc(STACK_SIZE);
+        newThread -> stack = malloc(STACK_SIZE); //Create new stack space for thread
         getcontext(&newThread -> context);
-        newThread -> context.uc_stack.ss_sp = newThread -> stack;
-        newThread -> context.uc_stack.ss_size = STACK_SIZE;
-        makecontext(&newThread -> context, myThreadHandler, 0);
+        newThread -> context.uc_stack.ss_sp = newThread -> stack; //Set the threads stack to the new allocated stack space
+        newThread -> context.uc_stack.ss_size = STACK_SIZE; //Tell the thread how big the stack is
+        makecontext(&newThread -> context, myThreadHandler, 0); //Set threads stack pointer to the thread handler
+        //swap to new thread
         currentThread -> status = READY;
         newThread -> status = RUNNING;
         thread_t *temp = currentThread;
@@ -197,6 +211,7 @@ int threadCreate(thFuncPtr funcPtr, void *argPtr) {
     }
 }
 
+//Swaps to next ready thread
 void threadYield(void){
     if (!interruptsAreDisabled) interruptDisable();
     thread_t *next = NextReadyThread();
@@ -216,6 +231,8 @@ void threadYield(void){
     return;
 } 
 
+//This function waits for a thread to call threadExit, then if **result is not NULL, store its result in *result
+//threadJoin also calls the helper function removeLLElement to remove thread_t structs that have exited
 void threadJoin(int thread_id, void **result) {
     interruptDisable();
     thread_t *rover = Header -> front;
@@ -255,6 +272,7 @@ void threadJoin(int thread_id, void **result) {
     return; //thread not found
 }
 
+//threadExit finishes a thread by setting its status to EXITED and then if there are any threads waiting, they are set to READY
 void threadExit(void *result) {
     interruptDisable();
     thread_t *temp = currentThread;
@@ -288,6 +306,7 @@ void threadExit(void *result) {
     return;
 }
 
+//Creates a new lock
 mutexlock_t *lockCreate(void) {
     interruptDisable();
     mutexlock_t *newLock = (mutexlock_t *)malloc(sizeof(mutexlock_t));
@@ -300,6 +319,7 @@ mutexlock_t *lockCreate(void) {
     return newLock; 
 }
 
+//frees a lock
 void lockDestroy(mutexlock_t *lock) {
     interruptDisable();
     free(lock -> waitingThreads);
@@ -307,6 +327,7 @@ void lockDestroy(mutexlock_t *lock) {
     interruptEnable();
 }
 
+//calling thread checks if a lock is available, if not it is set to waiting, added to the locks waiting list and then we swap to the next ready thread
 void threadLock(mutexlock_t *lock){
     interruptDisable();
 
@@ -334,6 +355,7 @@ void threadLock(mutexlock_t *lock){
     return;
 }
 
+//Makes a lock available and then readies a waiting thread
 void threadUnlock(mutexlock_t *lock){
     interruptDisable();
     lock -> locked = UNLOCKED;
@@ -352,6 +374,7 @@ void threadUnlock(mutexlock_t *lock){
     interruptEnable();
 }
 
+//creates a conditional variable
 condvar_t *condvarCreate(void) {
     condvar_t *newVar = (condvar_t *)malloc(sizeof(condvar_t));
     newVar -> numWaiting = 0;
@@ -360,6 +383,7 @@ condvar_t *condvarCreate(void) {
     return newVar;
 }
 
+//frees a conditional variable
 void condvarDestroy(condvar_t *cv) {
     interruptDisable();
     free(cv -> waitingThreads);
@@ -367,9 +391,10 @@ void condvarDestroy(condvar_t *cv) {
     interruptEnable();
 }
 
+//This function adds the current thread to the conditional variable's waiting list and then unlocks the lock then marks the calling thread as waiting and then switch to next ready thread
 void threadWait(mutexlock_t *lock, condvar_t *cv) {
     interruptDisable();
-    waitingListHandler(&cv -> waitingThreads, &cv -> numWaiting, ADDINGLIST, currentThread -> threadId);
+    waitingListHandler(&cv -> waitingThreads, &cv -> numWaiting, ADDINGLIST, currentThread -> threadId); //add current thread to waiting list
 
     //threadUnlock Logic here to avoid interrupt issues
     lock -> locked = UNLOCKED;
@@ -408,6 +433,7 @@ void threadWait(mutexlock_t *lock, condvar_t *cv) {
             swapcontext(&temp -> context, &next -> context);
             temp -> status = RUNNING;
             currentThread = temp;
+            if (!interruptsAreDisabled) interruptDisable();
         }
     }
     lock -> locked = LOCKED;
@@ -417,6 +443,7 @@ void threadWait(mutexlock_t *lock, condvar_t *cv) {
     return;
 }
 
+//Readies one thread in the conditional variables waiting list
 void threadSignal(mutexlock_t *lock, condvar_t *cv) {
     interruptDisable();
     if (cv -> numWaiting > 0){

@@ -1,10 +1,49 @@
-Gavin Lee
+Name: Gavin Lee
 
-Project 2
+Description:
+libmythread.c is an implemented library in C. It is a library that provides 
+threading managment, mutex locks and condition variables. The library supports cooperative
+and premptive scheduling by context switching and preventing interrupts with a global variable.
+
+
+DESIGN
+------
+Each thread is represented by a node in a doubley linked, linked list. ThreadInit()
+Must be the first call to the library in order to initialize the linked list. 
+threadCreate() - creates a thread by adding an element to the linked list and switching to that thread before returning
+                Each thread is started by setting the stack pointer to the myThreadHandler() function
+                that runs the thread by running the thread's function pointer and then calling threadExit() when it 
+                finishes.
+threadYield() - switches to another ready thread and sets the status to the calling thread to ready
+threadJoin() - searches the LL for a given thread and then the calling thread waits for 
+                that thread to finish by calling threadExit. It then stores that threads result
+                into the result if it is not NULL. This function also removes the LL element that exited.
+threadExit() - last call by each thread. It sets the calling thread's status to Exited and stores its function's result
+                in its result. Then if there are threads waiting on the exited thread, each of those threads are set to 
+                ready. Then it switches to the next ready thread
+lockCreate() - Creates a mutex lock and returns a pointer to that lock
+lockDestroy() - frees the memory associated with the lock struct
+threadLock() - the calling thread waits until it is able to access the lock specified. If the lock that the thread
+              is locked, it switches to another ready thread.
+threadUnlock() - Unlocks the lock and then sets a waiting thread (if there are any) to ready.
+condvarCreate() - creates a conditional variable
+condvarDestroy() - frees a conditional variable
+threadWait() - This function adds the current thread to the conditional variable's waiting list and then unlocks the lock
+                then mark the calling thread as waiting and then switch to next ready thread
+threadSignal() - signals thread wait to stop waiting and allow a thread through
+
+The main thread is treated as thread 0 with no allocated stack.
+Thread stacks are freed by other threads after exit, not by the exiting
+thread itself, since a thread cannot safely free its own stack.
 
 KNOWN PROBLEMS
-N/A
+--------------
+No known problems
 
-DESIGN:
-libmythreads - N/A
+COMPILING
+--------------
+The thread library can be used by using make to create the libmythreads.o file
+$(Compiler_Name) -Wall -g -c libmythreads.c -o libmythreads.o 
 
+Then compile your test using
+$(Compiler_Name) -Wall -g -o test_name test.c libmythreads.o
